@@ -15,7 +15,7 @@ if not SUPABASE_SERVICE_ROLE_KEY:
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
+MIN_SIMILARITY_SCORE = 0.4
 
 def main():
     query = "I feel overwhelmed by family expectations and pressure."

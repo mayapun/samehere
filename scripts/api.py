@@ -8,6 +8,7 @@ import random
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+MIN_SIMILARITY_SCORE = 0.4
 
 if not SUPABASE_URL:
     raise ValueError("Missing NEXT_PUBLIC_SUPABASE_URL environment variable.")
@@ -44,32 +45,44 @@ class CreateStoryRequest(BaseModel):
 def root():
     return {"ok": True, "message": "SameHere Python search API is running"}
 
-
 @app.post("/search")
 def search_stories(payload: SearchRequest):
-    query = payload.query.strip()
+    try:
+        query = payload.query.strip()
 
-    if not query:
-        return {"ok": False, "error": "Query is required."}
+        if not query:
+            return {"ok": False, "error": "Query is required."}
 
-    query_embedding = model.encode(query).tolist()
+        query_embedding = model.encode(query).tolist()
 
-    response = supabase.rpc(
-        "match_stories",
-        {
-            "query_embedding": query_embedding,
-            "match_count": payload.match_count,
-        },
-    ).execute()
+        response = supabase.rpc(
+            "match_stories",
+            {
+                "query_embedding": query_embedding,
+                "match_count": payload.match_count,
+            },
+        ).execute()
 
-    matches = response.data or []
+        matches = response.data or []
+        matches = [
+            match for match in matches
+            if match.get("similarity") is not None
+            and match["similarity"] >= MIN_SIMILARITY_SCORE
+        ]
 
-    return {
-        "ok": True,
-        "query": query,
-        "matches": matches,
-    }
+        return {
+            "ok": True,
+            "query": query,
+            "matches": matches,
+        }
 
+    except Exception as e:
+        print("SEARCH ERROR:", e)
+        return {
+            "ok": False,
+            "error": str(e),
+            "matches": [],
+        }
 
 @app.post("/stories")
 def create_story(payload: CreateStoryRequest):
