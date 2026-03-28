@@ -5,6 +5,7 @@ from sentence_transformers import SentenceTransformer
 from supabase import create_client
 from fastapi.middleware.cors import CORSMiddleware
 import random
+import requests
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -40,6 +41,9 @@ class CreateStoryRequest(BaseModel):
     body: str
     title: str | None = None
 
+class GentleStepRequest(BaseModel):
+    query: str
+    matches: list[dict] = []
 
 @app.get("/")
 def root():
@@ -51,7 +55,7 @@ def search_stories(payload: SearchRequest):
         query = payload.query.strip()
 
         if not query:
-            return {"ok": False, "error": "Query is required."}
+            return {"ok": False, "error": "Query is required.", "matches": [], "gentle_step": None}
 
         query_embedding = model.encode(query).tolist()
 
@@ -70,10 +74,14 @@ def search_stories(payload: SearchRequest):
             and match["similarity"] >= MIN_SIMILARITY_SCORE
         ]
 
+        # ollama_step = generate_gentle_step_with_ollama(query, matches)
+        # fallback_step = generate_gentle_step(query)
+
         return {
             "ok": True,
             "query": query,
             "matches": matches,
+            # "gentle_step": ollama_step or fallback_step,
         }
 
     except Exception as e:
@@ -82,8 +90,33 @@ def search_stories(payload: SearchRequest):
             "ok": False,
             "error": str(e),
             "matches": [],
+            "gentle_step": None,
         }
 
+@app.post("/gentle-step")
+def get_gentle_step(payload: GentleStepRequest):
+    try:
+        query = payload.query.strip()
+        matches = payload.matches or []
+
+        if not query:
+            return {"ok": False, "error": "Query is required.", "gentle_step": None}
+
+        ollama_step = generate_gentle_step_with_ollama(query, matches)
+        fallback_step = generate_gentle_step(query)
+
+        return {
+            "ok": True,
+            "gentle_step": ollama_step or fallback_step,
+        }
+
+    except Exception as e:
+        print("GENTLE STEP ERROR:", e)
+        return {
+            "ok": False,
+            "error": str(e),
+            "gentle_step": None,
+        }
 @app.post("/stories")
 def create_story(payload: CreateStoryRequest):
     body = payload.body.strip()
@@ -188,3 +221,66 @@ def generate_gentle_step(body: str) -> str:
         return random.choice(reflection_tips)
 
     return random.choice(general_tips)
+
+def generate_gentle_step_with_ollama(user_text: str, matches: list[dict]) -> str | None:
+    try:
+        if not matches:
+            return None
+
+        context_lines = []
+        for i, match in enumerate(matches[:3], start=1):
+            title = match.get("title") or "Shared experience"
+            body = (match.get("body") or "").strip()
+            next_step = (match.get("next_step") or "").strip()
+
+            context_lines.append(
+                f"""Match {i}:
+Title: {title}
+Story: {body}
+Helpful step: {next_step}"""
+            )
+
+        prompt = f"""
+You are helping write one gentle, emotionally safe next step for someone.
+
+User story:
+{user_text}
+
+Similar stories and their helpful steps:
+{chr(10).join(context_lines)}
+
+Write exactly one short gentle step.
+Rules:
+- Keep it under 20 words.
+- Be warm, soft, and specific.
+- Do not diagnose.
+- Do not mention therapy.
+- Do not mention crisis support.
+- Do not sound robotic.
+- Do not explain your reasoning.
+- Return only the gentle step text.
+""".strip()
+
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3.2:3b",
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=30,
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        text = (data.get("response") or "").strip()
+
+        if not text:
+            return None
+
+        return text
+
+    except Exception as e:
+        print("OLLAMA STEP ERROR:", e)
+        return None
